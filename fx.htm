@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forex Session Tracker & Alerts</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #38bdf8;
+            --success: #22c55e;
+            --danger: #ef4444;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 16px;
+            margin-bottom: 20px;
+        }
+
+        h1 { font-size: 1.5rem; margin: 0; color: var(--primary); }
+        
+        .clock {
+            font-size: 1.1rem;
+            font-weight: bold;
+            font-family: monospace;
+            background: #0f172a;
+            padding: 6px 12px;
+            border-radius: 6px;
+        }
+
+        .market-status {
+            text-align: center;
+            font-weight: bold;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .status-open { background-color: rgba(34, 197, 94, 0.2); color: var(--success); }
+        .status-closed { background-color: rgba(239, 68, 68, 0.2); color: var(--danger); }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            background: #0f172a;
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .control-btn {
+            background: #334155;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            flex: 1;
+            transition: background 0.2s;
+        }
+        .control-btn.active { background: var(--primary); color: #0f172a; font-weight: bold; }
+
+        .session-card {
+            background: #0f172a;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            border-left: 4px solid #334155;
+            position: relative;
+        }
+        .session-card.active { border-left-color: var(--success); }
+
+        .session-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        .session-name { font-weight: bold; font-size: 1.1rem; }
+        .session-hours { font-size: 0.8rem; color: var(--text-muted); }
+        
+        .badge {
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .badge-open { background: var(--success); color: #0f172a; }
+        .badge-closed { background: #334155; color: var(--text-muted); }
+
+        .progress-bar {
+            height: 6px;
+            background: #334155;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            background: var(--success);
+            transition: width 1s linear;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>FX Session Tracker</h1>
+        <div id="live-clock" class="clock">00:00:00 UTC</div>
+    </header>
+
+    <div id="market-banner" class="market-status status-open">MARKET OPEN</div>
+
+    <div class="controls">
+        <button id="notify-btn" class="control-btn" onclick="toggleNotifications()">🔔 Notifications: OFF</button>
+        <button id="sound-btn" class="control-btn" onclick="toggleSound()">🔊 Audio Alerts: OFF</button>
+    </div>
+
+    <div id="sessions-container"></div>
+</div>
+
+<script>
+    // Configuration Definitions (Hours in UTC)
+    const SESSIONS = [
+        { name: 'Sydney', open: 22, close: 7 },
+        { name: 'Tokyo', open: 0, close: 9 },
+        { name: 'London', open: 8, close: 17 },
+        { name: 'New York', open: 13, close: 22 }
+    ];
+
+    let notificationsEnabled = false;
+    let soundEnabled = false;
+    let previousStates = {};
+
+    // Generate Audio Synth Context (No external asset files needed)
+    function playAlertSound(isOpen) {
+        if (!soundEnabled) return;
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            
+            osc.type = 'sine';
+            // High double beep for open, descending tone for close
+            osc.frequency.setValueAtTime(isOpen ? 880 : 440, ctx.currentTime);
+            if (isOpen) {
+                osc.frequency.setValueAtTime(1200, ctx.currentTime + 0.1);
+            }
+            
+            gain.gain.setValueAtTime(0.1, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+            
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.3);
+        } catch (e) { console.error("Audio error:", e); }
+    }
+
+    function toggleNotifications() {
+        if (!notificationsEnabled) {
+            Notification.requestPermission().then(permission => {
+                if (permission === 'granted') {
+                    notificationsEnabled = true;
+                    document.getElementById('notify-btn').classList.add('active');
+                    document.getElementById('notify-btn').innerText = "🔔 Notifications: ON";
+                }
+            });
+        } else {
+            notificationsEnabled = false;
+            document.getElementById('notify-btn').classList.remove('active');
+            document.getElementById('notify-btn').innerText = "🔔 Notifications: OFF";
+        }
+    }
+
+    function toggleSound() {
+        soundEnabled = !soundEnabled;
+        const btn = document.getElementById('sound-btn');
+        if (soundEnabled) {
+            btn.classList.add('active');
+            btn.innerText = "🔊 Audio Alerts: ON";
+            playAlertSound(true); // Test chime
+        } else {
+            btn.classList.remove('active');
+            btn.innerText = "🔊 Audio Alerts: OFF";
+        }
+    }
+
+    function sendNotification(title, body) {
+        if (notificationsEnabled && Notification.permission === 'granted') {
+            new Notification(title, { body: body });
+        }
+    }
+
+    function checkWeekend(day, hour) {
+        // Market closes Friday at 22:00 UTC and reopens Sunday at 21:00 UTC
+        if (day === 6) return true; // Saturday
+        if (day === 5 && hour >= 22) return true; // Friday night
+        if (day === 0 && hour < 21) return true; // Sunday morning/afternoon
+        return false;
+    }
+
+    function buildUI() {
+        const container = document.getElementById('sessions-container');
+        container.innerHTML = '';
+        SESSIONS.forEach(session => {
+            container.innerHTML += `
+                <div id="card-${session.name}" class="session-card">
+                    <div class="session-header">
+                        <div>
+                            <span class="session-name">${session.name}</span>
+                            <div class="session-hours">UTC: ${String(session.open).padStart(2, '0')}:00 - ${String(session.close).padStart(2, '0')}:00</div>
+                        </div>
+                        <span id="badge-${session.name}" class="badge badge-closed">Closed</span>
+                    </div>
+                    <div class="progress-bar"><div id="progress-${session.name}" class="progress-fill"></div></div>
+                </div>
+            `;
+            previousStates[session.name] = false;
+        });
+    }
+
+    function updateTracker() {
+        const now = new Date();
+        
+        // Format live clock string
+        document.getElementById('live-clock').innerText = 
+            now.toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+
+        const day = now.getUTCDay();
+        const hour = now.getUTCHours();
+        const minute = now.getUTCMinutes();
+        const totalCurrentMinutes = (hour * 60) + minute;
+
+        const isWeekend = checkWeekend(day, hour);
+        const banner = document.getElementById('market-banner');
+
+        if (isWeekend) {
+            banner.innerText = "MARKET CLOSED (WEEKEND)";
+            banner.className = "market-status status-closed";
+        } else {
+            banner.innerText = "MARKET OPEN";
+            banner.className = "market-status status-open";
+        }
+
+        SESSIONS.forEach(session => {
+            let isOpen = false;
+            let progressPercent = 0;
+
+            if (!isWeekend) {
+                // Calculate state handling standard midnight transitions
+                if (session.open < session.close) {
+                    isOpen = hour >= session.open && hour < session.close;
+                    if (isOpen) {
+                        const duration = (session.close - session.open) * 60;
+                        const elapsed = totalCurrentMinutes - (session.open * 60);
+                        progressPercent = (elapsed / duration) * 100;
+                    }
+                } else { // Over-midnight sessions (Sydney & New York to Tokyo gap handles)
+                    isOpen = hour >= session.open || hour < session.close;
+                    if (isOpen) {
+                        const duration = ((24 - session.open) + session.close) * 60;
+                        const elapsed = hour >= session.open ? 
+                            totalCurrentMinutes - (session.open * 60) : 
+                            ((24 - session.open) * 60) + totalCurrentMinutes;
+                        progressPercent = (elapsed / duration) * 100;
+                    }
+                }
+            }
+
+            // Update DOM Styles
+            const card = document.getElementById(`card-${session.name}`);
+            const badge = document.getElementById(`badge-${session.name}`);
+            const progress = document.getElementById(`progress-${session.name}`);
+
+            if (isOpen) {
+                card.classList.add('active');
+                badge.innerText = "Open";
+                badge.className = "badge badge-open";
+                progress.style.width = `${progressPercent}%`;
+            } else {
+                card.classList.remove('active');
+                badge.innerText = "Closed";
+                badge.className = "badge badge-closed";
+                progress.style.width = '0%';
+            }
+
+            // Stateful Evaluation Alert Loop
+            if (isOpen !== previousStates[session.name]) {
+                // Prevent mass alarms firing on initial page boot-up
+                if (previousStates[session.name] !== undefined) {
+                    const eventText = isOpen ? "opened" : "closed";
+                    sendNotification(`Forex Session Alert`, `The ${session.name} session has ${eventText}.`);
+                    playAlertSound(isOpen);
+                }
+                previousStates[session.name] = isOpen;
+            }
+        });
+    }
+
+    // App Initialization
+    buildUI();
+    updateTracker();
+    setInterval(updateTracker, 1000); // Check ticks every second
+</script>
+
+</body>
+</html>
